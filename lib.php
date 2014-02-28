@@ -35,8 +35,8 @@ require_once($CFG->dirroot . '/repository/lib.php');
  */
 class repository_mediadrop extends repository {
 
-    var $server_url = 'http://mdone.info.bit.edu.cn';
-    var $api_key = 'Jd7tqOGoulFg7OIZObn';
+    var $server_url;
+    var $api_key;
 
     /**
      * Get instance options
@@ -70,33 +70,83 @@ class repository_mediadrop extends repository {
      */
     public function get_listing($encodedpath = '', $page = '') {
         global $CFG, $USER, $OUTPUT;
+
         $ret = array();
         $ret['dynload'] = true;
         $ret['nosearch'] = true;
         $ret['nologin'] = true;
         $ret['list'] = array();
-        
-        $c = new curl();
-        try {
-            $params = array('api_key' => $this->api_key, 'type' => 'video', 'embded_player' => 1);
-            $json = $c->get($this->server_url.'/api/media', $params);
-file_put_contents('/tmp/a.json', $json);
-            $data = json_decode($json);
-        } catch (moodle_exception $e) {
-            $this->setError(0, 'connection time-out or invalid url');
-            return false;
-        }
 
-        foreach ($data->media as $media) {
-            $item = array();
-            $item['title'] = $media->title;
-            $item['date'] = strtotime($media->publish_on);
-            $item['thumbnail'] = $media->thumbs->s->url;
-            $item['thumbnail_width'] = $media->thumbs->s->x;
-            $item['thumbnail_height'] = $media->thumbs->s->y;
-            $item['source'] = 'media:'.$media->slug;
-            $item['author'] = $media->author;
-            $ret['list'][] = $item;
+
+        if ($encodedpath == '') {
+            // lookup root folder
+
+            $category_params = array('api_key' => $this->api_key, 'depth' => 1);
+            $c = new curl();
+            try {
+                $json = $c->get($this->server_url.'/api/categories/tree', $category_params);
+                $data = json_decode($json);
+            } catch (moodle_exception $e) {
+                $this->setError(0, 'connection time-out or invalid url');
+                return false;
+            }
+
+            foreach ($data->categories as $category) {
+                $item = array();
+                $item['path'] = $encodedpath . '/' . $category->slug;
+                $item['title'] = $category->name;
+                $item['children'] = array();
+                $ret['list'][] = $item;
+            }
+
+        } else {
+            $crumbs = explode('/', $encodedpath);
+            $slug = array_pop($crumbs);
+
+            // lookup subfolders
+            $category_params = array('api_key' => $this->api_key, 'depth' => 1, 'slug' => $slug);
+            $c = new curl();
+            try {
+                $json = $c->get($this->server_url.'/api/categories/tree', $category_params);
+                $data = json_decode($json);
+            } catch (moodle_exception $e) {
+                $this->setError(0, 'connection time-out or invalid url');
+                return false;
+            }
+
+            foreach ($data->category->children as $category) {
+                $item = array();
+                $item['path'] = $encodedpath . '/' . $category->slug;
+                $item['title'] = $category->name;
+                $item['children'] = array();
+                $ret['list'][] = $item;
+            }
+
+            // lookup media
+            if ($data->category->media_count > 0) {
+                $media_params = array('api_key' => $this->api_key, 'type' => 'video', 'embded_player' => 1, 'category' => $slug, 'limit' => 50);
+                $c = new curl();
+                try {
+                    $json = $c->get($this->server_url.'/api/media', $media_params);
+                    $data = json_decode($json);
+                } catch (moodle_exception $e) {
+                    $this->setError(0, 'connection time-out or invalid url');
+                    return false;
+                }
+
+                foreach ($data->media as $media) {
+                    $item = array();
+                    $item['title'] = $media->title;
+                    $item['date'] = strtotime($media->publish_on);
+                    $item['thumbnail'] = $media->thumbs->s->url;
+                    $item['thumbnail_width'] = $media->thumbs->s->x;
+                    $item['thumbnail_height'] = $media->thumbs->s->y;
+                    $item['source'] = 'media:'.$media->slug;
+                    $item['author'] = $media->author;
+                    $ret['list'][] = $item;
+                }
+            }
+
         }
 
         return $ret;
